@@ -5,13 +5,38 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const fs = require('fs');
 
 let mainWindow;
 let backendProcess = null;
+let backendReady = false;
 
 // Backend configuration
 const BACKEND_PORT = 5000;
 const BACKEND_HOST = '127.0.0.1';
+
+// Get the app's resource path (works in both dev and packaged)
+function getResourcePath() {
+    if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+        return path.join(__dirname, '../..');
+    }
+    // In production, resources are in the asar archive
+    return process.resourcesPath || path.join(path.dirname(process.execPath), 'resources');
+}
+
+function getPythonExecutable() {
+    // In production, we bundle Python or use system Python
+    if (process.platform === 'win32') {
+        // Try bundled python.exe first (if using pyinstaller or similar)
+        const bundledPython = path.join(path.dirname(process.execPath), 'python.exe');
+        if (fs.existsSync(bundledPython)) {
+            return bundledPython;
+        }
+        // Try system python
+        return 'python';
+    }
+    return 'python3';
+}
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -29,8 +54,9 @@ function createWindow() {
         titleBarStyle: 'hiddenInset'
     });
 
-    // Load the index.html
-    mainWindow.loadFile(path.join(__dirname, '../index.html'));
+    // Load the index.html - handle both packaged and dev paths
+    const indexPath = path.join(getResourcePath(), 'frontend', 'index.html');
+    mainWindow.loadFile(indexPath);
 
     // Show window when ready
     mainWindow.once('ready-to-show', () => {
@@ -48,11 +74,24 @@ function createWindow() {
 }
 
 function startBackend() {
-    const backendPath = path.join(__dirname, '../../backend/main.py');
+    const resourcePath = getResourcePath();
+    const backendPath = path.join(resourcePath, 'backend', 'main.py');
+    const pythonExe = getPythonExecutable();
     
-    backendProcess = spawn('python', [backendPath], {
-        cwd: path.join(__dirname, '../..'),
-        env: { ...process.env, PYTHONPATH: path.join(__dirname, '../..') }
+    console.log(`[Main] Starting backend from: ${backendPath}`);
+    console.log(`[Main] Using Python: ${pythonExe}`);
+    
+    // Set up environment for packaged app
+    const env = { 
+        ...process.env, 
+        PYTHONPATH: resourcePath,
+        APP_RESOURCE_PATH: resourcePath
+    };
+    
+    backendProcess = spawn(pythonExe, [backendPath], {
+        cwd: resourcePath,
+        env: env,
+        detached: false
     });
 
     backendProcess.stdout.on('data', (data) => {
@@ -65,10 +104,22 @@ function startBackend() {
 
     backendProcess.on('close', (code) => {
         console.log(`[Backend] Process exited with code ${code}`);
+        backendReady = false;
         if (mainWindow) {
             mainWindow.webContents.send('backend-status', { 
                 status: 'disconnected',
-                message: 'Backend stopped'
+                message: `Backend stopped (exit code: ${code})`
+            });
+        }
+    });
+
+    backendProcess.on('error', (err) => {
+        console.error(`[Backend] Failed to start: ${err.message}`);
+        backendReady = false;
+        if (mainWindow) {
+            mainWindow.webContents.send('backend-status', { 
+                status: 'error',
+                message: `Failed to start backend: ${err.message}`
             });
         }
     });
@@ -78,18 +129,73 @@ function startBackend() {
 
 function stopBackend() {
     if (backendProcess) {
-        backendProcess.kill();
+        try {
+            // Send SIGTERM first for graceful shutdown
+            backendProcess.kill('SIGTERM');
+            
+            // Force kill after a short delay if still running
+            setTimeout(() => {
+                if (backendProcess && !backendProcess.killed) {
+                    backendProcess.kill('SIGKILL');
+                }
+            }, 3000);
+        } catch (e) {
+            console.error('[Main] Error stopping backend:', e);
+        }
         backendProcess = null;
     }
+    backendReady = false;
+}
+
+// Health check with retry
+async function waitForBackend(maxAttempts = 30, interval = 1000) {
+    const http = require('http');
+    
+    for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(resolve => setTimeout(resolve, interval));
+        
+        try {
+            const result = await new Promise((resolve, reject) => {
+                const req = http.get(`http://${BACKEND_HOST}:${BACKEND_PORT}/api/health`, (res) => {
+                    if (res.statusCode === 200) {
+                        resolve(true);
+                    } else {
+                        reject(new Error(`HTTP ${res.statusCode}`));
+                    }
+                });
+                req.on('error', reject);
+                req.setTimeout(2000);
+            });
+            
+            if (result) {
+                backendReady = true;
+                return true;
+            }
+        } catch (e) {
+            // Continue retrying
+        }
+    }
+    
+    return false;
 }
 
 // IPC Handlers
 ipcMain.handle('start-backend', async () => {
     try {
         startBackend();
-        // Wait a bit for backend to start
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        return { success: true };
+        // Wait for backend to be ready
+        const ready = await waitForBackend();
+        if (ready) {
+            if (mainWindow) {
+                mainWindow.webContents.send('backend-status', { 
+                    status: 'ready',
+                    message: 'Backend connected'
+                });
+            }
+            return { success: true };
+        } else {
+            return { success: false, error: 'Backend failed to start' };
+        }
     } catch (error) {
         return { success: false, error: error.message };
     }
@@ -101,7 +207,10 @@ ipcMain.handle('stop-backend', async () => {
 });
 
 ipcMain.handle('check-backend', async () => {
-    return { running: backendProcess !== null };
+    return { 
+        running: backendProcess !== null,
+        ready: backendReady
+    };
 });
 
 ipcMain.handle('open-file-dialog', async (event, filters) => {
@@ -120,11 +229,20 @@ ipcMain.handle('open-file-dialog', async (event, filters) => {
 });
 
 // App lifecycle
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     createWindow();
     
     // Start backend automatically
     startBackend();
+    
+    // Wait for backend and notify renderer
+    const ready = await waitForBackend();
+    if (mainWindow) {
+        mainWindow.webContents.send('backend-status', { 
+            status: ready ? 'ready' : 'error',
+            message: ready ? 'Backend connected' : 'Backend failed to start'
+        });
+    }
 });
 
 app.on('window-all-closed', () => {
@@ -140,6 +258,11 @@ app.on('activate', () => {
     }
 });
 
-app.on('will-quit', () => {
+app.on('will-quit', (event) => {
+    // Stop backend before quitting
+    stopBackend();
+});
+
+app.on('before-quit', () => {
     stopBackend();
 });

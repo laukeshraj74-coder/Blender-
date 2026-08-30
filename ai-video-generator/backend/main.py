@@ -7,8 +7,17 @@ import sys
 import os
 from pathlib import Path
 
+# Handle packaged app resource path
+APP_RESOURCE_PATH = os.environ.get('APP_RESOURCE_PATH')
+if APP_RESOURCE_PATH:
+    # Running from packaged Electron app
+    BASE_DIR = Path(APP_RESOURCE_PATH)
+else:
+    # Running in development mode
+    BASE_DIR = Path(__file__).parent.parent
+
 # Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(BASE_DIR))
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
