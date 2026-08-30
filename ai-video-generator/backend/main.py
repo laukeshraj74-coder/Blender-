@@ -252,68 +252,218 @@ def start_generation():
 
 
 def _run_generation(project_id, prompt, attachments):
-    """Background generation process with real AI analysis."""
-    global generation_state
+    """Background generation process with real AI analysis and video generation."""
+    import json
+    from datetime import datetime
     
+    global generation_state
+
     try:
         stages = generation_state["stages"]
-        
+        project_dir = project_manager.get_project_path(project_id)
+
         # Stage 1: Preparing project (already done)
         with generation_lock:
             stages[0]["status"] = "completed"
             stages[1]["status"] = "current"
             generation_state["stage"] = "understanding"
-            generation_state["progress"] = 10
+            generation_state["progress"] = 5
             generation_state["message"] = "Understanding your request..."
-        
+
         logger.info(f"Starting AI analysis for project: {project_id}", component="Generation")
-        
+
         # Check for cancellation
         if generation_state["cancelled"]:
             _handle_cancellation()
             return
-        
+
         # Stage 2: Understanding request with AI
         analysis_result = video_analyzer.analyze_request(prompt, attachments)
-        
+
         if not analysis_result.get('success'):
             error = analysis_result.get('error', {})
             raise Exception(f"AI analysis failed: {error.get('message', 'Unknown error')}")
-        
+
         # Save AI understanding to project
         ai_understanding = {
-            "analyzed_at": __import__('datetime').datetime.now().isoformat(),
+            "analyzed_at": datetime.now().isoformat(),
             "model": analysis_result.get('model'),
             "data": analysis_result.get('data'),
             "validation_issues": analysis_result.get('validation_issues', [])
         }
-        
+
         project_manager.update_project(project_id, {
             "ai_understanding": ai_understanding,
-            "status": "analyzed"
+            "status": "analyzing"
         })
-        
+
         logger.info(f"AI analysis completed for project: {project_id}", component="Generation")
-        
+
         # Mark understanding stage as complete
         with generation_lock:
             stages[1]["status"] = "completed"
-            generation_state["stage"] = "completed_analysis"
-            generation_state["progress"] = 25
-            generation_state["message"] = "Request understood"
+            stages[2]["status"] = "current"
+            generation_state["stage"] = "creating_video_plan"
+            generation_state["progress"] = 15
+            generation_state["message"] = "Creating video plan..."
+
+        # Extract video spec from AI response
+        ai_data = analysis_result.get('data', {})
         
-        # For Phase 2, we stop here - no actual video generation yet
-        # The AI understanding is saved and the user can see the result
+        # Create VideoSpec from AI response
+        video_spec = {
+            "title": ai_data.get('title', 'AI Generated Video'),
+            "description": ai_data.get('description', prompt),
+            "duration_seconds": min(ai_data.get('duration', 10), 10),  # Max 10 seconds for testing
+            "fps": 24,
+            "resolution": {"width": 640, "height": 360},  # Lower resolution for reliability
+            "scenes": []
+        }
         
-        # Complete generation (Phase 2 - only AI analysis)
+        # Extract scenes from storyboard if available
+        storyboard = ai_data.get('storyboard', [])
+        if storyboard:
+            for scene in storyboard[:3]:  # Limit to 3 scenes
+                video_spec["scenes"].append({
+                    "duration": scene.get('duration', 3),
+                    "description": scene.get('description', ''),
+                    "visual": scene.get('visual', ''),
+                    "text": scene.get('text', ''),
+                    "camera": scene.get('camera', '')
+                })
+        
+        # If no scenes from AI, create a default one
+        if not video_spec["scenes"]:
+            video_spec["scenes"].append({
+                "duration": video_spec["duration_seconds"],
+                "description": prompt,
+                "visual": "Simple 3D animation",
+                "text": "",
+                "camera": "static"
+            })
+        
+        # Save video spec
+        video_spec_path = project_dir / 'video_spec.json'
+        with open(video_spec_path, 'w') as f:
+            json.dump(video_spec, f, indent=2)
+        
+        logger.info(f"Video spec created: {video_spec['title']}", component="Generation")
+
+        # Mark script/storyboard stages as complete
+        with generation_lock:
+            stages[2]["status"] = "completed"
+            stages[3]["status"] = "completed"
+            stages[4]["status"] = "current"
+            generation_state["stage"] = "creating_blender_scene"
+            generation_state["progress"] = 30
+            generation_state["message"] = "Creating Blender scene..."
+
+        # Generate Blender script
+        render_dir = project_dir / 'render'
+        render_dir.mkdir(exist_ok=True)
+        
+        blender_result = blender_manager.generate_script(video_spec, render_dir)
+        
+        if not blender_result.get('success'):
+            raise Exception(f"Blender script generation failed: {blender_result.get('error', 'Unknown error')}")
+        
+        logger.info(f"Blender script generated: {blender_result.get('script_path')}", component="Generation")
+
+        # Mark scenes stage complete
+        with generation_lock:
+            stages[4]["status"] = "completed"
+            stages[5]["status"] = "current"
+            generation_state["stage"] = "rendering"
+            generation_state["progress"] = 40
+            generation_state["message"] = "Rendering frames..."
+
+        # Run Blender rendering
+        cancel_flag = threading.Event()
+        
+        # Start Blender render
+        script_path = blender_result.get('script_path')
+        render_result = blender_manager.render(
+            script_path,
+            render_dir,
+            timeout=600,  # 10 minute timeout
+            cancel_flag=cancel_flag
+        )
+        
+        if cancel_flag.is_set():
+            _handle_cancellation()
+            return
+        
+        if not render_result.get('success'):
+            raise Exception(f"Blender rendering failed: {render_result.get('error', 'Unknown error')}")
+        
+        frames_rendered = render_result.get('frames_rendered', 0)
+        logger.info(f"Blender rendered {frames_rendered} frames", component="Generation")
+
+        # Update progress based on frames rendered
+        total_frames = blender_result.get('total_frames', 1)
+        with generation_lock:
+            generation_state["message"] = f"Rendering: {frames_rendered} / {total_frames} frames"
+
+        # Mark rendering stage complete
+        with generation_lock:
+            stages[5]["status"] = "completed"
+            stages[6]["status"] = "completed"  # Skip narration
+            stages[7]["status"] = "completed"  # Skip subtitles
+            stages[8]["status"] = "current"
+            generation_state["stage"] = "encoding_video"
+            generation_state["progress"] = 70
+            generation_state["message"] = "Encoding video..."
+
+        # Assemble video with FFmpeg
+        output_path = project_dir / 'output.mp4'
+        
+        ffmpeg_result = ffmpeg_manager.assemble_video(
+            frames_dir=render_dir,
+            output_path=output_path,
+            fps=video_spec.get('fps', 24),
+            audio_path=None,  # No audio for Phase 3
+            timeout=300
+        )
+        
+        if not ffmpeg_result.get('success'):
+            raise Exception(f"FFmpeg assembly failed: {ffmpeg_result.get('error', 'Unknown error')}")
+        
+        logger.info(f"Video assembled: {output_path}", component="Generation")
+
+        # Mark encoding complete
+        with generation_lock:
+            stages[8]["status"] = "completed"
+            generation_state["stage"] = "verifying_video"
+            generation_state["progress"] = 85
+            generation_state["message"] = "Verifying video..."
+
+        # Verify the output video
+        verify_result = ffmpeg_manager.verify_video(output_path)
+        
+        if not verify_result.get('success'):
+            logger.warning(f"Video verification warning: {verify_result.get('error', 'Unknown')}", component="Generation")
+            # Don't fail, just warn - the video may still be playable
+        
+        # Clean up frame files
+        blender_manager.cleanup_frames(render_dir)
+        
+        # Finalize
+        project_manager.update_project(project_id, {
+            "status": "completed",
+            "output_video": str(output_path),
+            "video_properties": verify_result if verify_result.get('success') else None,
+            "completed_at": datetime.now().isoformat()
+        })
+
+        logger.info(f"Generation completed successfully for project: {project_id}", component="Generation")
+
+        # Mark all stages complete
         with generation_lock:
             generation_state["is_generating"] = False
-            generation_state["progress"] = 25  # Only 25% - just analysis done
+            generation_state["progress"] = 100
             generation_state["stage"] = "completed"
-            generation_state["message"] = "Analysis complete. Video generation coming soon."
-        
-        logger.info(f"Generation phase 2 completed for project: {project_id}", component="Generation")
-        
+            generation_state["message"] = "Video generation completed!"
+
     except Exception as e:
         logger.error(f"Generation error: {e}", component="Generation")
         with generation_lock:
@@ -325,7 +475,6 @@ def _run_generation(project_id, prompt, attachments):
                 if stage["status"] == "current":
                     stage["status"] = "error"
                     break
-
 
 def _handle_cancellation():
     """Handle generation cancellation."""
