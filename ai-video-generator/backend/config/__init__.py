@@ -81,14 +81,23 @@ class Config:
             print(f"[ERROR] Could not save config: {e}")
             return False
     
-    def get(self, *keys):
-        """Get a configuration value by nested keys."""
+    def get(self, *keys, default=None):
+        """Get a configuration value by nested keys.
+        
+        Args:
+            *keys: Variable number of keys to traverse nested config.
+            default: Default value to return if key path is not found.
+                     Can be any type including dict/list.
+        
+        Returns:
+            The configuration value at the specified path, or default if not found.
+        """
         value = self.config
         for key in keys:
             if isinstance(value, dict) and key in value:
                 value = value[key]
             else:
-                return None
+                return default
         return value
     
     def set(self, *keys_and_value):
