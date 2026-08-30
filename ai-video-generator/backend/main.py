@@ -20,6 +20,7 @@ from backend.config import get_config
 from backend.utils.logger import get_logger
 from backend.projects import get_project_manager
 from backend.ai import get_ai_provider
+from backend.ai.video_analyzer import get_video_request_analyzer
 from backend.blender import get_blender_manager
 from backend.video import get_ffmpeg_manager
 from backend.audio import get_audio_manager
@@ -33,6 +34,7 @@ config = get_config()
 logger = get_logger()
 project_manager = get_project_manager()
 ai_provider = get_ai_provider(config)
+video_analyzer = get_video_request_analyzer(ai_provider)
 blender_manager = get_blender_manager(config)
 ffmpeg_manager = get_ffmpeg_manager(config)
 audio_manager = get_audio_manager(config)
@@ -187,7 +189,7 @@ def delete_project(project_id):
 
 @app.route('/api/generate', methods=['POST'])
 def start_generation():
-    """Start video generation (placeholder for Phase 1)."""
+    """Start video generation with real AI analysis."""
     log_request_info()
     
     global generation_state
@@ -234,8 +236,11 @@ def start_generation():
         
         logger.info(f"Generation started for project: {project_id}", component="Generation")
         
-        # Start generation in background thread (placeholder - does nothing yet)
-        thread = threading.Thread(target=_run_generation, args=(project_id, prompt))
+        # Start generation in background thread
+        thread = threading.Thread(
+            target=_run_generation,
+            args=(project_id, prompt, project.get('attachments', []))
+        )
         thread.daemon = True
         thread.start()
         
@@ -246,48 +251,68 @@ def start_generation():
         })
 
 
-def _run_generation(project_id, prompt):
-    """Background generation process (placeholder)."""
+def _run_generation(project_id, prompt, attachments):
+    """Background generation process with real AI analysis."""
     global generation_state
     
     try:
-        # This is a placeholder - no actual generation happens in Phase 1
-        # The structure is ready for real implementation later
-        
         stages = generation_state["stages"]
-        total_stages = len(stages)
         
-        for i, stage in enumerate(stages):
-            if generation_state["cancelled"]:
-                with generation_lock:
-                    generation_state["is_generating"] = False
-                    generation_state["stage"] = "cancelled"
-                    generation_state["message"] = "Generation cancelled by user"
-                logger.info(f"Generation cancelled at stage: {stage['id']}", component="Generation")
-                return
-            
-            # Update stage status
-            with generation_lock:
-                stage["status"] = "current"
-                generation_state["stage"] = stage["id"]
-                generation_state["progress"] = int((i / total_stages) * 100)
-                generation_state["message"] = stage["name"]
-            
-            # Simulate work (placeholder - remove in real implementation)
-            time.sleep(0.5)
-            
-            # Mark stage as complete
-            with generation_lock:
-                stage["status"] = "completed"
+        # Stage 1: Preparing project (already done)
+        with generation_lock:
+            stages[0]["status"] = "completed"
+            stages[1]["status"] = "current"
+            generation_state["stage"] = "understanding"
+            generation_state["progress"] = 10
+            generation_state["message"] = "Understanding your request..."
         
-        # Complete generation
+        logger.info(f"Starting AI analysis for project: {project_id}", component="Generation")
+        
+        # Check for cancellation
+        if generation_state["cancelled"]:
+            _handle_cancellation()
+            return
+        
+        # Stage 2: Understanding request with AI
+        analysis_result = video_analyzer.analyze_request(prompt, attachments)
+        
+        if not analysis_result.get('success'):
+            error = analysis_result.get('error', {})
+            raise Exception(f"AI analysis failed: {error.get('message', 'Unknown error')}")
+        
+        # Save AI understanding to project
+        ai_understanding = {
+            "analyzed_at": __import__('datetime').datetime.now().isoformat(),
+            "model": analysis_result.get('model'),
+            "data": analysis_result.get('data'),
+            "validation_issues": analysis_result.get('validation_issues', [])
+        }
+        
+        project_manager.update_project(project_id, {
+            "ai_understanding": ai_understanding,
+            "status": "analyzed"
+        })
+        
+        logger.info(f"AI analysis completed for project: {project_id}", component="Generation")
+        
+        # Mark understanding stage as complete
+        with generation_lock:
+            stages[1]["status"] = "completed"
+            generation_state["stage"] = "completed_analysis"
+            generation_state["progress"] = 25
+            generation_state["message"] = "Request understood"
+        
+        # For Phase 2, we stop here - no actual video generation yet
+        # The AI understanding is saved and the user can see the result
+        
+        # Complete generation (Phase 2 - only AI analysis)
         with generation_lock:
             generation_state["is_generating"] = False
-            generation_state["progress"] = 100
+            generation_state["progress"] = 25  # Only 25% - just analysis done
             generation_state["stage"] = "completed"
-            generation_state["message"] = "Generation completed"
+            generation_state["message"] = "Analysis complete. Video generation coming soon."
         
-        logger.info(f"Generation completed for project: {project_id}", component="Generation")
+        logger.info(f"Generation phase 2 completed for project: {project_id}", component="Generation")
         
     except Exception as e:
         logger.error(f"Generation error: {e}", component="Generation")
@@ -295,6 +320,23 @@ def _run_generation(project_id, prompt):
             generation_state["is_generating"] = False
             generation_state["stage"] = "error"
             generation_state["message"] = f"Generation failed: {str(e)}"
+            # Find current stage and mark as error
+            for stage in stages:
+                if stage["status"] == "current":
+                    stage["status"] = "error"
+                    break
+
+
+def _handle_cancellation():
+    """Handle generation cancellation."""
+    global generation_state
+    
+    with generation_lock:
+        generation_state["is_generating"] = False
+        generation_state["stage"] = "cancelled"
+        generation_state["message"] = "Generation cancelled by user"
+    
+    logger.info("Generation cancelled", component="Generation")
 
 
 @app.route('/api/generation/status', methods=['GET'])
