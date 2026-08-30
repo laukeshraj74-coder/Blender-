@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' http://127.0.0.1:5000">
+    <title>AI Video Generator</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="styles/global.css">
+    <link rel="stylesheet" href="styles/sidebar.css">
+    <link rel="stylesheet" href="styles/workspace.css">
+    <link rel="stylesheet" href="styles/settings.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <div class="sidebar-logo-icon">🎬</div>
+                    <span>AI Video</span>
+                </div>
+                <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Toggle Sidebar">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M7 15L12 10L7 5V15Z"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <div class="sidebar-new-video">
+                    <button class="btn btn-primary" id="newVideoBtn">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M10 4V16M4 10H16"/>
+                        </svg>
+                        <span>New Video</span>
+                    </button>
+                </div>
+                
+                <div class="sidebar-nav-group">
+                    <div class="sidebar-nav-label">Menu</div>
+                    <button class="sidebar-nav-item active" data-page="workspace">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="14" height="14" rx="2"/>
+                            <path d="M3 9H17"/>
+                            <path d="M9 17V9"/>
+                        </svg>
+                        <span>Workspace</span>
+                    </button>
+                    <button class="sidebar-nav-item" data-page="history">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="10" cy="10" r="8"/>
+                            <path d="M10 6V10L13 13"/>
+                        </svg>
+                        <span>History</span>
+                    </button>
+                    <button class="sidebar-nav-item" data-page="projects">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 7V5C3 3.89543 3.89543 3 5 3H15C16.1046 3 17 3.89543 17 5V7"/>
+                            <path d="M3 17V15C3 13.8954 3.89543 13 5 13H15C16.1046 13 17 13.8954 17 15V17"/>
+                            <path d="M3 10V10C3 8.89543 3.89543 8 5 8H15C16.1046 8 17 8.89543 17 10V10C17 11.1046 16.1046 12 15 12H5C3.89543 12 3 11.1046 3 10Z"/>
+                        </svg>
+                        <span>Projects</span>
+                    </button>
+                </div>
+                
+                <div class="sidebar-nav-group">
+                    <div class="sidebar-nav-label">Settings</div>
+                    <button class="sidebar-nav-item" data-page="settings">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="10" cy="10" r="3"/>
+                            <path d="M10 2V4"/>
+                            <path d="M10 16V18"/>
+                            <path d="M18 10H16"/>
+                            <path d="M4 10H2"/>
+                            <path d="M15.657 4.343L14.243 5.757"/>
+                            <path d="M5.757 14.243L4.343 15.657"/>
+                            <path d="M15.657 15.657L14.243 14.243"/>
+                            <path d="M5.757 5.757L4.343 4.343"/>
+                        </svg>
+                        <span>Settings</span>
+                    </button>
+                </div>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <div class="sidebar-footer-status">
+                    <div class="status-row">
+                        <span class="status-label">Backend</span>
+                        <span class="status-value" id="backendStatus">
+                            <span class="status-indicator status-busy">
+                                <span class="status-dot"></span>
+                                Connecting
+                            </span>
+                        </span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">AI</span>
+                        <span class="status-value" id="aiStatus">
+                            <span class="status-indicator status-busy">
+                                <span class="status-dot"></span>
+                                Not configured
+                            </span>
+                        </span>
+                    </div>
+                </div>
+                <div class="sidebar-footer-info">
+                    Version 0.1.0
+                </div>
+            </div>
+        </aside>
+        
+        <!-- Main Workspace -->
+        <main class="main-workspace">
+            <header class="workspace-header">
+                <h1 class="workspace-title" id="workspaceTitle">AI Video Generator</h1>
+                <div class="workspace-status">
+                    <span class="status-indicator status-ready" id="workspaceStatus">
+                        <span class="status-dot"></span>
+                        Ready
+                    </span>
+                </div>
+            </header>
+            
+            <div class="workspace-content" id="workspaceContent">
+                <!-- Content will be rendered by JavaScript -->
+            </div>
+            
+            <footer class="workspace-footer" id="workspaceFooter">
+                <!-- Footer content rendered by JavaScript -->
+            </footer>
+        </main>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="utils/api.js"></script>
+    <script src="renderer.js"></script>
+</body>
+</html>
